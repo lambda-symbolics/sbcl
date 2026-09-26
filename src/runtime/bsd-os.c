@@ -75,6 +75,16 @@ int sb_GetTID()
 #include <sys/stat.h> /* For the stat-family wrappers. */
 #include <dirent.h>   /* For the opendir()/readdir() wrappers */
 #include <sys/socket.h> /* For the socket() wrapper */
+#ifdef LISP_FEATURE_SB_FUTEX
+#include <sys/futex.h>
+#include <sys/syscall.h>
+/* NetBSD's futex(2) is Linux-compatible, but libc exports no wrapper. */
+static inline int
+sys_futex(int *word, int op, int val, const struct timespec *timeout)
+{
+    return syscall(SYS___futex, word, op, val, timeout, NULL, 0, 0);
+}
+#endif
 static void netbsd_init();
 static os_vm_size_t max_allocation_size;
 #endif /* __NetBSD__ */
@@ -220,6 +230,12 @@ The system may fail to start.\n",
     }
     max_allocation_size = (os_vm_size_t)((rl.rlim_cur / 2) &
       ~(32 * 1024 * 1024));
+#ifdef LISP_FEATURE_SB_FUTEX
+    int word = 0;
+    if (sys_futex(&word, FUTEX_WAKE | FUTEX_PRIVATE_FLAG, 1, NULL) < 0
+        && errno == ENOSYS)
+        lose("This SBCL waits on futexes, but the kernel has no futex(2).");
+#endif
 }
 
 /* Various routines in NetBSD's C library are compatibility wrappers
@@ -266,6 +282,29 @@ _socket(int domain, int type, int protocol)
 {
     return socket(domain, type, protocol);
 }
+
+#ifdef LISP_FEATURE_SB_FUTEX
+/* FUTEX_WAIT takes a relative timeout, and fails with EAGAIN when the word
+ * no longer holds OLDVAL, as on Linux. */
+int
+futex_wait(int *lock_word, int oldval, long sec, unsigned long usec)
+{
+    struct timespec timeout = {.tv_sec = sec, .tv_nsec = usec * 1000};
+    int ret = sys_futex(lock_word, FUTEX_WAIT | FUTEX_PRIVATE_FLAG, oldval,
+                        sec < 0 ? NULL : &timeout);
+
+    if (ret == 0) return 0;
+    if (errno == ETIMEDOUT) return 1;
+    if (errno == EINTR) return 2;
+    return -1;
+}
+
+int
+futex_wake(int *lock_word, int n)
+{
+    return sys_futex(lock_word, FUTEX_WAKE | FUTEX_PRIVATE_FLAG, n, NULL);
+}
+#endif
 #endif /* __NetBSD__ */
 
 #if defined(LISP_FEATURE_FREEBSD)

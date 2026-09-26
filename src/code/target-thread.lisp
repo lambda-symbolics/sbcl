@@ -21,7 +21,7 @@
           with-session-lock
           with-spinlock))
 
-#+(or linux win32 freebsd darwin openbsd)
+#+(or linux win32 freebsd darwin openbsd netbsd)
 (defmacro my-kernel-thread-id () `(thread-os-tid *current-thread*))
 
 ;;; CAS Lock
@@ -255,7 +255,7 @@ a simple-string (not necessarily unique) or NIL."
               ;; if not finished, show the STATE as a list.
               ;; if finished, show the VALUES.
               "~@[tid=~D ~]~@[~S ~]~:[~{~I~A~^~2I~_ ~}~_~;~A~:[ no values~; values: ~:*~{~S~^, ~}~]~]"
-              (or #+(or linux win32 freebsd darwin openbsd)
+              (or #+(or linux win32 freebsd darwin openbsd netbsd)
                   (thread-os-tid thread))
               (thread-name thread)
               (eq :finished state)

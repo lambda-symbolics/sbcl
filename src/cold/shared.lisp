@@ -300,7 +300,8 @@
         ;; Win32 conditionally adds :sb-futex in grovel-features.sh
         ;; Futexes aren't available in all macos versions, but they are available in
         ;; all versions that support arm, so always enable them there
-        (when (target-featurep '(:and :sb-thread (:or :linux :freebsd :openbsd (:and :darwin :arm64))))
+        (when (target-featurep '(:and :sb-thread (:or :linux :freebsd :openbsd :netbsd
+                                                        (:and :darwin :arm64))))
           (pushnew :sb-futex sb-xc:*features*))
         (when (target-featurep '(:and :64-bit :sb-futex :little-endian))
           (pushnew :bitpacked-mutex sb-xc:*features*))
