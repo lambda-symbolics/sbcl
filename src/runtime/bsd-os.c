@@ -78,11 +78,12 @@ int sb_GetTID()
 #ifdef LISP_FEATURE_SB_FUTEX
 #include <sys/futex.h>
 #include <sys/syscall.h>
+#include <time.h>
 /* NetBSD's futex(2) is Linux-compatible, but libc exports no wrapper. */
 static inline int
-sys_futex(int *word, int op, int val, const struct timespec *timeout)
+sys_futex(int *word, int op, int val, const struct timespec *timeout, int val3)
 {
-    return syscall(SYS___futex, word, op, val, timeout, NULL, 0, 0);
+    return syscall(SYS___futex, word, op, val, timeout, NULL, 0, val3);
 }
 #endif
 static void netbsd_init();
@@ -232,7 +233,7 @@ The system may fail to start.\n",
       ~(32 * 1024 * 1024));
 #ifdef LISP_FEATURE_SB_FUTEX
     int word = 0;
-    if (sys_futex(&word, FUTEX_WAKE | FUTEX_PRIVATE_FLAG, 1, NULL) < 0
+    if (sys_futex(&word, FUTEX_WAKE | FUTEX_PRIVATE_FLAG, 1, NULL, 0) < 0
         && errno == ENOSYS)
         lose("This SBCL waits on futexes, but the kernel has no futex(2).");
 #endif
@@ -284,14 +285,30 @@ _socket(int domain, int type, int protocol)
 }
 
 #ifdef LISP_FEATURE_SB_FUTEX
-/* FUTEX_WAIT takes a relative timeout, and fails with EAGAIN when the word
- * no longer holds OLDVAL, as on Linux. */
+/* A wait fails with EAGAIN when the word no longer holds OLDVAL, as on
+ * Linux.  Timed waits use FUTEX_WAIT_BITSET and an absolute deadline: our
+ * signal handlers are installed with SA_RESTART, and NetBSD restarts an
+ * interrupted FUTEX_WAIT with its original relative timeout, so every
+ * interrupt would push the deadline back.  A restart keeps the absolute
+ * deadline, and a plain FUTEX_WAKE still wakes a bitset waiter. */
 int
 futex_wait(int *lock_word, int oldval, long sec, unsigned long usec)
 {
-    struct timespec timeout = {.tv_sec = sec, .tv_nsec = usec * 1000};
-    int ret = sys_futex(lock_word, FUTEX_WAIT | FUTEX_PRIVATE_FLAG, oldval,
-                        sec < 0 ? NULL : &timeout);
+    int ret;
+
+    if (sec < 0)
+        ret = sys_futex(lock_word, FUTEX_WAIT | FUTEX_PRIVATE_FLAG, oldval,
+                        NULL, 0);
+    else {
+        struct timespec deadline;
+        clock_gettime(CLOCK_MONOTONIC, &deadline);
+        deadline.tv_sec += sec;
+        deadline.tv_nsec += usec * 1000;
+        deadline.tv_sec += deadline.tv_nsec / 1000000000;
+        deadline.tv_nsec %= 1000000000;
+        ret = sys_futex(lock_word, FUTEX_WAIT_BITSET | FUTEX_PRIVATE_FLAG,
+                        oldval, &deadline, FUTEX_BITSET_MATCH_ANY);
+    }
 
     if (ret == 0) return 0;
     if (errno == ETIMEDOUT) return 1;
@@ -302,7 +319,7 @@ futex_wait(int *lock_word, int oldval, long sec, unsigned long usec)
 int
 futex_wake(int *lock_word, int n)
 {
-    return sys_futex(lock_word, FUTEX_WAKE | FUTEX_PRIVATE_FLAG, n, NULL);
+    return sys_futex(lock_word, FUTEX_WAKE | FUTEX_PRIVATE_FLAG, n, NULL, 0);
 }
 #endif
 #endif /* __NetBSD__ */
